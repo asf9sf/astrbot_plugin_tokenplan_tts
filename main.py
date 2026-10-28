@@ -19,6 +19,11 @@ from astrbot.api.message_components import Plain, Record
 from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, StarTools
 
+try:
+    from astrbot.api.event import MessageChain
+except ImportError:  # 兼容旧版导出路径
+    from astrbot.core.message.message_chain import MessageChain
+
 from .tts_client import TTSError, TokenPlanTTSClient
 
 # 修改这里可以更换 LLM 工具名（改完需在 AstrBot 人格设置里重新勾选，并重载插件）
@@ -283,16 +288,25 @@ class TokenPlanTTSPlugin(Star):
             yield f"语音发送失败：{exc}。请改用文字回复。"
             return
 
+        # 注意：新版 AstrBot 里工具函数 yield 出来的消息不会被自动发送，
+        # 必须用 event.send() 直接发出去，否则只会静默丢弃。
+        record = Record.fromFileSystem(str(path))
         try:
-            yield event.chain_result([Record.fromFileSystem(str(path))])
+            await event.send(MessageChain([record]))
             self._mark_sent(event)
+            logger.info(f"[TokenPlanTTS] 语音已发送 {path.name} ({len(content)} 字)")
             yield (
                 "语音已作为 QQ 语音消息发送成功。不要再输出这段台词，"
-                "直接继续对话即可。"
+                "也不要再调用本工具，直接继续对话即可。"
             )
         except Exception as exc:  # noqa: BLE001
             logger.error(f"[TokenPlanTTS] 发送语音失败: {exc}")
-            yield f"语音已合成但发送失败：{exc}。请改用文字回复。"
+            # 旧版本可能不支持 event.send，退回消息链 yield
+            try:
+                yield event.chain_result([record])
+                yield "语音已发送。"
+            except Exception as exc2:  # noqa: BLE001
+                yield f"语音已合成但发送失败：{exc2}。请改用文字回复。"
 
     # ---------------- 2. 提示词注入 ----------------
 
