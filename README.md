@@ -32,9 +32,9 @@
 | `enable_tool` | `true` | 是否注册 LLM 工具 |
 | `inject_prompt` | `true` | 是否每轮向 LLM 注入台词写作要求 |
 | `style_hint` | 空 | 追加的角色说话风格，如「全程古风，自称本座」 |
-| `voice_probability` | `35` | 想发语音时真正发出的概率。35 约三发一，100 想发就发，0 等于关闭 |
-| `voice_cooldown_turns` | `2` | 发过语音后强制文字几轮，防止连续轰炸 |
-| `auto_voice` / `auto_keep_text` | `false` / `true` | 自动语音模式及其是否保留原文（同样受概率和冷却约束） |
+| `voice_probability` | `50` | AI 自主发语音时真正发出的概率。50 约一半，100 想发就发，0 等于关闭 |
+| `voice_cooldown_turns` | `1` | 发过语音后强制文字几轮，防止连续轰炸 |
+| `auto_voice` / `auto_keep_text` | `false` / `true` | 自动语音模式及其是否保留原文。**开启后不受概率和冷却约束**，每条都转，适合调试 |
 | `max_chars` | `300` | 单次合成字数上限 |
 | `cooldown` | `3` | 同会话冷却秒数，防刷屏 |
 

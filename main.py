@@ -465,8 +465,8 @@ class TokenPlanTTSPlugin(Star):
             return
         if self._already_sent(event):
             return
-        if not self._should_use_voice(event):
-            return
+        # 自动语音是显式开关：开了就每条都转，不再受概率和轮次冷却约束。
+        # 概率/冷却只作用于「AI 自己决定要不要调 send_voice 工具」的场景。
 
         result = event.get_result()
         if not result or not getattr(result, "chain", None):
