@@ -1,15 +1,15 @@
 {
   "api_key": {
-    "description": "Token Plan 套餐 API Key",
+    "description": "API Key",
     "type": "string",
     "default": "",
-    "hint": "以 sk-sp- 开头的套餐密钥，在阿里云百炼控制台的 Token Plan 套餐页获取"
+    "hint": "Token Plan 套餐用 sk-sp- 开头的密钥；改用普通百炼业务空间时填该空间的普通 API Key（sk- 开头）"
   },
   "api_base": {
-    "description": "Token Plan 服务地址",
+    "description": "服务地址",
     "type": "string",
     "default": "https://token-plan.cn-beijing.maas.aliyuncs.com",
-    "hint": "国内站用 cn-beijing，海外站用 https://token-plan.ap-southeast-1.maas.aliyuncs.com；结尾不要带斜杠"
+    "hint": "三种填法：①套餐默认 https://token-plan.cn-beijing.maas.aliyuncs.com；②业务空间根地址 https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com；③业务空间 OpenAI 兼容地址 https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1 —— 带 compatible-mode 时自动走 /audio/speech 协议，失败会回退原生接口。结尾不要带斜杠"
   },
   "model": {
     "description": "语音合成模型",

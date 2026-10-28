@@ -113,6 +113,22 @@ class TokenPlanTTSClient:
             return self.api_base
         return self.api_base + ENDPOINT_PATH
 
+    @property
+    def is_openai_compat(self) -> bool:
+        """base_url 里带 compatible-mode 就按 OpenAI 协议走，否则走 DashScope 原生接口。"""
+        return "/compatible-mode" in self.api_base.lower()
+
+    @property
+    def openai_endpoint(self) -> str:
+        return self.api_base.rstrip("/") + "/audio/speech"
+
+    @property
+    def native_base(self) -> str:
+        """从 OpenAI 兼容地址倒推业务空间根地址，用于失败回退。"""
+        base = self.api_base.rstrip("/")
+        idx = base.lower().find("/compatible-mode")
+        return base[:idx] if idx > 0 else base
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(
@@ -144,11 +160,74 @@ class TokenPlanTTSClient:
             raise TTSError("待合成文本为空")
 
         fmt = (audio_format or self.audio_format).lower()
+        voice_name = voice or self.voice
+
+        audio: bytes | None = None
+
+        # base_url 指向业务空间的 /compatible-mode/v1 时先走 OpenAI 协议
+        if self.is_openai_compat:
+            try:
+                audio = await self._synth_openai(text, voice_name, fmt)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    f"[TokenPlanTTS] OpenAI 兼容端点失败，回退原生接口: {exc}",
+                )
+                audio = None
+
+        if not audio:
+            audio = await self._synth_native(text, voice_name, fmt, instruction)
+
+        if not audio:
+            raise TTSError("TTS 接口未返回有效的音频数据")
+
+        ext = _sniff_ext(audio, fmt)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        file_path = save_dir / f"tts_{uuid.uuid4().hex[:12]}.{ext}"
+        file_path.write_bytes(audio)
+        logger.debug(f"[TokenPlanTTS] 已保存音频 {file_path} ({len(audio)} bytes)")
+        return file_path
+
+    async def _synth_openai(self, text: str, voice_name: str, fmt: str) -> bytes | None:
+        """OpenAI 兼容协议：POST {base}/audio/speech，直接返回音频二进制。"""
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "input": text,
+            "voice": voice_name,
+            "response_format": (
+                fmt if fmt in ("wav", "mp3", "opus", "pcm", "aac", "flac") else "wav"
+            ),
+        }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "Accept": "*/*",
+        }
+        session = self._ensure_session()
+        async with session.post(
+            self.openai_endpoint, json=payload, headers=headers
+        ) as resp:
+            raw = await resp.read()
+            ctype = (resp.headers.get("Content-Type") or "").lower()
+            if resp.status != 200:
+                raise TTSError(
+                    f"OpenAI 兼容 TTS 返回 {resp.status}: "
+                    f"{raw[:400].decode('utf-8', errors='ignore')}",
+                )
+            return await self._parse_audio(resp, raw, ctype, session)
+
+    async def _synth_native(
+        self,
+        text: str,
+        voice_name: str,
+        fmt: str,
+        instruction: str | None,
+    ) -> bytes | None:
+        """DashScope 原生协议：POST {根地址}/api/v1/services/aigc/multimodal-generation/generation。"""
         payload: dict[str, Any] = {
             "model": self.model,
             "input": {
                 "text": text,
-                "voice": voice or self.voice,
+                "voice": voice_name,
                 "format": fmt,
                 "sample_rate": self.sample_rate,
             },
@@ -161,6 +240,7 @@ class TokenPlanTTSClient:
             else:
                 payload.setdefault("parameters", {})["instruction"] = ins
 
+        url = self.native_base.rstrip("/") + ENDPOINT_PATH
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -169,36 +249,20 @@ class TokenPlanTTSClient:
 
         session = self._ensure_session()
         try:
-            async with session.post(
-                self.endpoint,
-                json=payload,
-                headers=headers,
-            ) as resp:
+            async with session.post(url, json=payload, headers=headers) as resp:
                 raw = await resp.read()
                 ctype = (resp.headers.get("Content-Type") or "").lower()
-
                 if resp.status != 200:
                     raise TTSError(
                         f"TTS 接口返回 {resp.status}: {raw[:500].decode('utf-8', errors='ignore')}",
                     )
-
-                audio = await self._parse_audio(resp, raw, ctype, session)
+                return await self._parse_audio(resp, raw, ctype, session)
         except aiohttp.ClientError as exc:
             raise TTSError(f"请求 TTS 接口失败: {exc}") from exc
         except TTSError:
             raise
         except Exception as exc:  # noqa: BLE001
             raise TTSError(f"合成语音时发生异常: {exc}") from exc
-
-        if not audio:
-            raise TTSError("TTS 接口未返回有效的音频数据")
-
-        ext = _sniff_ext(audio, fmt)
-        save_dir.mkdir(parents=True, exist_ok=True)
-        file_path = save_dir / f"tts_{uuid.uuid4().hex[:12]}.{ext}"
-        file_path.write_bytes(audio)
-        logger.debug(f"[TokenPlanTTS] 已保存音频 {file_path} ({len(audio)} bytes)")
-        return file_path
 
     async def _parse_audio(
         self,

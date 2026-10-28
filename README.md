@@ -38,6 +38,22 @@
 | `max_chars` | `300` | 单次合成字数上限 |
 | `cooldown` | `3` | 同会话冷却秒数，防刷屏 |
 
+### 换成百炼业务空间（用套餐以外的模型）
+
+除了 Token Plan 套餐，也可以接普通百炼业务空间按量付费，调用更多模型。把 `api_base` 改成业务空间地址即可，插件会自动识别协议：
+
+| 填法 | 走的协议 |
+| --- | --- |
+| `https://token-plan.cn-beijing.maas.aliyuncs.com` | DashScope 原生接口（套餐默认） |
+| `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com` | DashScope 原生接口 |
+| `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` | **OpenAI 兼容协议** `/audio/speech` |
+
+判定规则：**地址里带 `compatible-mode` 就走 OpenAI 协议，否则走原生接口。**
+
+OpenAI 协议失败时会自动回退到同一空间的 `/api/v1/services/aigc/multimodal-generation/generation`，不会因为协议不对就完全发不出声。
+
+注意：改用业务空间后 `api_key` 要换成该空间的普通 Key（`sk-` 开头），不是套餐密钥（`sk-sp-` 开头）。
+
 ### 语音不要每句都发
 
 默认配置下语音是**稀缺的**，逻辑是两层：
