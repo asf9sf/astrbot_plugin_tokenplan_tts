@@ -30,6 +30,24 @@ from .tts_client import TTSError, TokenPlanTTSClient
 # 修改这里可以更换 LLM 工具名（改完需在 AstrBot 人格设置里重新勾选，并重载插件）
 TTS_TOOL_NAME = "send_voice"
 
+# 用户明确索要语音的说法：命中就强制发一次，不受概率和冷却影响。
+# 否则会出现「用户说你先发语音，结果被概率拦下」的荒唐情况。
+VOICE_REQUEST_HINTS = (
+    "发语音",
+    "语音回复",
+    "用语音",
+    "语音说",
+    "来句语音",
+    "语音呢",
+    "怎么不发语音",
+    "说给我听",
+    "听你说话",
+    "听你的声音",
+    "想听你说",
+    "念给我",
+    "说句话听听",
+)
+
 # ---------- 朗读文本清洗 ----------
 _CODE_BLOCK = re.compile(r"```.*?```", re.S)
 _INLINE_CODE = re.compile(r"`([^`]*)`")
@@ -118,8 +136,8 @@ class TokenPlanTTSPlugin(Star):
         self.cooldown: int = int(cfg("cooldown", 3) or 0)
         self.max_cache_files: int = int(cfg("max_cache_files", 300) or 300)
         # 语音稀缺化：想发语音时按概率真正发出，且发过之后强制安静几轮
-        self.voice_probability: int = int(cfg("voice_probability", 35) or 0)
-        self.voice_cooldown_turns: int = int(cfg("voice_cooldown_turns", 2) or 0)
+        self.voice_probability: int = int(cfg("voice_probability", 50) or 0)
+        self.voice_cooldown_turns: int = int(cfg("voice_cooldown_turns", 1) or 0)
 
         self.client = TokenPlanTTSClient(
             api_key=self.api_key,
@@ -143,6 +161,8 @@ class TokenPlanTTSPlugin(Star):
         # 轮次计数与上次发语音的轮次，用于"语音稀缺化"
         self._turn: dict[str, int] = {}
         self._last_voice_turn: dict[str, int] = {}
+        # 用户这一轮明确要语音时置位，跳过概率与冷却（一次性）
+        self._force_voice: dict[str, bool] = {}
         self._cleanup_task: asyncio.Task | None = None
 
         logger.info(
@@ -220,6 +240,23 @@ class TokenPlanTTSPlugin(Star):
         sid = self._session_id(event)
         self._turn[sid] = self._turn.get(sid, 0) + 1
 
+    def _user_wants_voice(self, event: AstrMessageEvent, req=None) -> bool:
+        """判断用户这一句是不是在明确索要语音。"""
+        text = ""
+        try:
+            text = (getattr(event, "message_str", "") or "").strip()
+        except Exception:  # noqa: BLE001
+            text = ""
+        if not text and req is not None:
+            try:
+                text = (getattr(req, "prompt", "") or "").strip()
+            except Exception:  # noqa: BLE001
+                text = ""
+        # 太长的段落多半不是单纯要语音，避免误判
+        if not text or len(text) > 80:
+            return False
+        return any(k in text for k in VOICE_REQUEST_HINTS)
+
     def _should_use_voice(self, event: AstrMessageEvent) -> bool:
         """决定这一轮到底发不发语音。
 
@@ -229,15 +266,28 @@ class TokenPlanTTSPlugin(Star):
         这样语音变成「偶尔的惊喜」，而不是「每句都念」。
         """
         sid = self._session_id(event)
+        # 用户这一轮明确说「发语音」「说给我听」时，不受概率和冷却限制
+        if self._force_voice.pop(sid, False):
+            logger.info("[TokenPlanTTS] 用户明确要语音，跳过概率与冷却")
+            return True
+
         cur = self._turn.get(sid, 0)
         last = self._last_voice_turn.get(sid, -9999)
         if self.voice_cooldown_turns > 0 and (cur - last) <= self.voice_cooldown_turns:
+            logger.info(
+                f"[TokenPlanTTS] 语音冷却中（距上次 {cur - last} 轮，需 > {self.voice_cooldown_turns}），本轮用文字",
+            )
             return False
         if self.voice_probability >= 100:
             return True
         if self.voice_probability <= 0:
             return False
-        return random.randint(1, 100) <= self.voice_probability
+        hit = random.randint(1, 100) <= self.voice_probability
+        if not hit:
+            logger.info(
+                f"[TokenPlanTTS] 概率未中（{self.voice_probability}%），本轮用文字",
+            )
+        return hit
 
     def _mark_voice_turn(self, event: AstrMessageEvent) -> None:
         sid = self._session_id(event)
@@ -365,6 +415,11 @@ class TokenPlanTTSPlugin(Star):
     async def on_llm_request(self, event: AstrMessageEvent, req: ProviderRequest) -> None:
         # 轮次计数要无条件累加，语音冷却靠它判断
         self._bump_turn(event)
+
+        # 用户这轮明确要语音就置位，_should_use_voice 会直接放行一次
+        if self._user_wants_voice(event, req):
+            self._force_voice[self._session_id(event)] = True
+            logger.info("[TokenPlanTTS] 检测到用户索要语音，本轮强制放行")
 
         if not (self.enable_tool and self.inject_prompt):
             return
