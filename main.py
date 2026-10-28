@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 import re
 import time
 from pathlib import Path
@@ -116,6 +117,9 @@ class TokenPlanTTSPlugin(Star):
         self.clean_text: bool = bool(cfg("clean_text", True))
         self.cooldown: int = int(cfg("cooldown", 3) or 0)
         self.max_cache_files: int = int(cfg("max_cache_files", 300) or 300)
+        # 语音稀缺化：想发语音时按概率真正发出，且发过之后强制安静几轮
+        self.voice_probability: int = int(cfg("voice_probability", 35) or 0)
+        self.voice_cooldown_turns: int = int(cfg("voice_cooldown_turns", 2) or 0)
 
         self.client = TokenPlanTTSClient(
             api_key=self.api_key,
@@ -136,6 +140,9 @@ class TokenPlanTTSPlugin(Star):
         self.audio_dir.mkdir(parents=True, exist_ok=True)
 
         self._last_call: dict[str, float] = {}
+        # 轮次计数与上次发语音的轮次，用于"语音稀缺化"
+        self._turn: dict[str, int] = {}
+        self._last_voice_turn: dict[str, int] = {}
         self._cleanup_task: asyncio.Task | None = None
 
         logger.info(
@@ -209,6 +216,33 @@ class TokenPlanTTSPlugin(Star):
     def _mark_call(self, event: AstrMessageEvent) -> None:
         self._last_call[self._session_id(event)] = time.time()
 
+    def _bump_turn(self, event: AstrMessageEvent) -> None:
+        sid = self._session_id(event)
+        self._turn[sid] = self._turn.get(sid, 0) + 1
+
+    def _should_use_voice(self, event: AstrMessageEvent) -> bool:
+        """决定这一轮到底发不发语音。
+
+        两条规则叠在一起：
+        1. 上一轮刚发过语音，接下来 voice_cooldown_turns 轮一律用文字；
+        2. 其余的按 voice_probability 概率放行。
+        这样语音变成「偶尔的惊喜」，而不是「每句都念」。
+        """
+        sid = self._session_id(event)
+        cur = self._turn.get(sid, 0)
+        last = self._last_voice_turn.get(sid, -9999)
+        if self.voice_cooldown_turns > 0 and (cur - last) <= self.voice_cooldown_turns:
+            return False
+        if self.voice_probability >= 100:
+            return True
+        if self.voice_probability <= 0:
+            return False
+        return random.randint(1, 100) <= self.voice_probability
+
+    def _mark_voice_turn(self, event: AstrMessageEvent) -> None:
+        sid = self._session_id(event)
+        self._last_voice_turn[sid] = self._turn.get(sid, 0)
+
     def _mark_sent(self, event: AstrMessageEvent) -> None:
         """标记本轮已由工具发过语音，供自动模式跳过。"""
         event = unwrap_event(event)
@@ -281,6 +315,13 @@ class TokenPlanTTSPlugin(Star):
             yield "语音发送失败：请求过于频繁，请稍后再试。"
             return
 
+        if not self._should_use_voice(event):
+            yield (
+                "这次不用发语音，用文字正常回复就好。"
+                "不要向用户解释「这次改用文字」，直接自然地说话即可。"
+            )
+            return
+
         self._mark_call(event)
         try:
             path = await self.client.synthesize(
@@ -303,6 +344,7 @@ class TokenPlanTTSPlugin(Star):
         try:
             await event.send(MessageChain([record]))
             self._mark_sent(event)
+            self._mark_voice_turn(event)
             logger.info(f"[TokenPlanTTS] 语音已发送 {path.name} ({len(content)} 字)")
             yield (
                 "语音已作为 QQ 语音消息发送成功。不要再输出这段台词，"
@@ -321,11 +363,16 @@ class TokenPlanTTSPlugin(Star):
 
     @filter.on_llm_request()
     async def on_llm_request(self, event: AstrMessageEvent, req: ProviderRequest) -> None:
+        # 轮次计数要无条件累加，语音冷却靠它判断
+        self._bump_turn(event)
+
         if not (self.enable_tool and self.inject_prompt):
             return
 
         hint = (
             f"你具备发送语音的能力：调用工具 `{TTS_TOOL_NAME}` 即可把你的一句话变成语音发给用户。"
+            "注意：语音是稀缺的，绝大多数回复用文字就好。只有在情绪特别强烈、"
+            "句子很短、或者用户明确想听你声音的时候才发语音。连着发语音会让人烦。"
             "当用户想听你说话、要求发语音，或你觉得语音更有表现力时调用它。"
             "台词必须完全贴合你当前的人设（口吻、称谓、口头禅）与上下文语境，"
             "只写要念出来的口语，不要旁白、括号、动作描写、emoji 和 Markdown，尽量控制在 120 字内。"
@@ -363,6 +410,8 @@ class TokenPlanTTSPlugin(Star):
             return
         if self._already_sent(event):
             return
+        if not self._should_use_voice(event):
+            return
 
         result = event.get_result()
         if not result or not getattr(result, "chain", None):
@@ -394,6 +443,7 @@ class TokenPlanTTSPlugin(Star):
                     pass
         result.chain.append(Record.fromFileSystem(str(path)))
         self._mark_sent(event)
+        self._mark_voice_turn(event)
 
     # ---------------- 4. 命令 ----------------
 
