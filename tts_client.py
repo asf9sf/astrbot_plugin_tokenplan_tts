@@ -90,6 +90,7 @@ class TokenPlanTTSClient:
         audio_format: str = "wav",
         sample_rate: int = 24000,
         instruction: str = "",
+        instruction_field: str = "parameters",
         timeout: int = 60,
     ) -> None:
         self.api_key = (api_key or "").strip()
@@ -99,6 +100,8 @@ class TokenPlanTTSClient:
         self.audio_format = (audio_format or "wav").lower()
         self.sample_rate = int(sample_rate or 24000)
         self.instruction = (instruction or "").strip()
+        # instruction 的官方位置是顶层 parameters；早期实现误放进 input 导致不生效
+        self.instruction_field = (instruction_field or "parameters").strip().lower()
         self.timeout = int(timeout or 60)
         self._session: aiohttp.ClientSession | None = None
 
@@ -152,8 +155,11 @@ class TokenPlanTTSClient:
         }
         # 情感 / 风格指令（qwen3-tts-flash 不支持，留空即不传）
         ins = instruction if instruction is not None else self.instruction
-        if ins:
-            payload["input"]["instruction"] = ins
+        if ins and self.instruction_field != "none":
+            if self.instruction_field == "input":
+                payload["input"]["instruction"] = ins
+            else:
+                payload.setdefault("parameters", {})["instruction"] = ins
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",

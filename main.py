@@ -125,6 +125,7 @@ class TokenPlanTTSPlugin(Star):
             audio_format=str(cfg("audio_format", "wav")),
             sample_rate=int(cfg("sample_rate", 24000) or 24000),
             instruction=str(cfg("instruction", "") or ""),
+            instruction_field=str(cfg("instruction_field", "parameters")),
             timeout=int(cfg("timeout", 60) or 60),
         )
 
@@ -245,6 +246,14 @@ class TokenPlanTTSPlugin(Star):
         3. 用第一人称口语表达，句子短、自然，像真人说话，控制在 120 字以内；
         4. 调用成功后不要再把这些台词以文字形式重复输出一遍。
 
+        情绪标签（强烈建议使用，这是让声音有情绪的关键）：
+        在 text 里直接嵌入方括号标签，模型会按标签演绎，不会把标签念出来。
+        情绪类：[happy] 开心 [angry] 愤怒 [sad] 悲伤 [excited] 兴奋 [calm] 平静 [surprised] 惊讶
+        角色类：[shy] 害羞 [fearful] 恐惧 [whisper] 低语
+        声学类：[giggles] 轻笑 [gasp] 抽气 [sigh] 叹气 [pause] 停顿
+        用法示例：text = "[shy]我、我才没有在等你呢……[pause]只是刚好路过而已。"
+        情绪转换时可在句中间再插标签，例如 "[angry]你怎么能这样！[sad]我明明那么信任你。"
+
         Args:
             text(string): 要念出来的台词，纯口语文本，不含任何格式标记
             emotion(string): 情绪或语气指令，如「温柔」「生气」「兴奋」「撒娇」「低沉」，不需要时留空
@@ -320,6 +329,11 @@ class TokenPlanTTSPlugin(Star):
             "当用户想听你说话、要求发语音，或你觉得语音更有表现力时调用它。"
             "台词必须完全贴合你当前的人设（口吻、称谓、口头禅）与上下文语境，"
             "只写要念出来的口语，不要旁白、括号、动作描写、emoji 和 Markdown，尽量控制在 120 字内。"
+            "重要：合成模型支持情绪标签，在台词里嵌入 [happy] [shy] [angry] [sad] [excited] "
+            "[calm] [surprised] [giggles] [sigh] [whisper] 这类方括号标签，"
+            "能让声音带上对应情绪和语气细节，标签本身不会被念出来。"
+            "请根据当下语境主动使用，例如撒娇用 [shy]、生气用 [angry]、开心用 [happy]，"
+            "情绪转折处可在句中再插一个标签。不使用标签时声音会趋于平淡。"
         )
         if self.style_hint:
             hint += f"补充要求：{self.style_hint}"

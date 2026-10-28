@@ -39,7 +39,13 @@
     "description": "默认情感 / 风格指令",
     "type": "string",
     "default": "",
-    "hint": "例如「用温柔撒娇的语气说」「语速稍快，带点兴奋」。留空则不使用指令控制（qwen3-tts-flash 不支持该参数）"
+    "hint": "整段语气描述，例如「请用温柔撒娇的语气说话」。留空则不加整段指令，此时情绪主要靠台词里的 [happy][shy][angry] 等标签控制"
+  },
+  "instruction_field": {
+    "description": "instruction 参数放置位置",
+    "type": "string",
+    "default": "parameters",
+    "hint": "默认 parameters（官方标准位置）。若报「未知参数」可改成 input；填 none 则完全不发送 instruction，只靠文本标签控制情绪"
   },
   "enable_tool": {
     "description": "启用 LLM 工具（AI 自主决定何时发语音）",
