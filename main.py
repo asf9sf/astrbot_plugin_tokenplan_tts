@@ -45,6 +45,33 @@ _MULTI_NL = re.compile(r"\n{3,}")
 _EXTRA_KEY_SENT = "tokenplan_tts_sent"
 
 
+def unwrap_event(arg):
+    """兼容 AstrBot 新旧版本的工具入参。
+
+    旧版本 @filter.llm_tool 直接把 AstrMessageEvent 传给工具函数；
+    新版本（约 4.24+）传的是 ContextWrapper[AstrAgentContext]，
+    真正的消息事件在 .context.event 上。
+    """
+    if arg is None:
+        return None
+    # 已经是消息事件
+    if hasattr(arg, "get_session_id") or hasattr(arg, "unified_msg_origin"):
+        return arg
+    # ContextWrapper -> AstrAgentContext
+    ctx = getattr(arg, "context", None)
+    if ctx is not None:
+        ev = getattr(ctx, "event", None)
+        if ev is not None and hasattr(ev, "get_session_id"):
+            return ev
+        if hasattr(ctx, "get_session_id"):
+            return ctx
+    # 某些版本可能直接挂在 .event 上
+    ev = getattr(arg, "event", None)
+    if ev is not None and hasattr(ev, "get_session_id"):
+        return ev
+    return arg
+
+
 def clean_for_speech(text: str) -> str:
     """把 Markdown / 链接 / emoji 等不适合朗读的内容清理掉。"""
     if not text:
@@ -154,10 +181,17 @@ class TokenPlanTTSPlugin(Star):
     # ---------------- 通用逻辑 ----------------
 
     def _session_id(self, event: AstrMessageEvent) -> str:
+        event = unwrap_event(event)
         try:
-            return event.unified_msg_origin or event.get_session_id()
+            umo = getattr(event, "unified_msg_origin", "")
+            if umo:
+                return str(umo)
         except Exception:  # noqa: BLE001
-            return event.get_session_id()
+            pass
+        try:
+            return str(event.get_session_id())
+        except Exception:  # noqa: BLE001
+            return "unknown"
 
     def _in_cooldown(self, event: AstrMessageEvent) -> bool:
         if self.cooldown <= 0:
@@ -171,12 +205,14 @@ class TokenPlanTTSPlugin(Star):
 
     def _mark_sent(self, event: AstrMessageEvent) -> None:
         """标记本轮已由工具发过语音，供自动模式跳过。"""
+        event = unwrap_event(event)
         try:
             event.set_extra(_EXTRA_KEY_SENT, True)
         except Exception:  # noqa: BLE001
             pass
 
     def _already_sent(self, event: AstrMessageEvent) -> bool:
+        event = unwrap_event(event)
         try:
             return bool(event.get_extra(_EXTRA_KEY_SENT))
         except Exception:  # noqa: BLE001
@@ -208,6 +244,9 @@ class TokenPlanTTSPlugin(Star):
             text(string): 要念出来的台词，纯口语文本，不含任何格式标记
             emotion(string): 情绪或语气指令，如「温柔」「生气」「兴奋」「撒娇」「低沉」，不需要时留空
         """
+        # 新版本传入的是 ContextWrapper，这里统一还原成消息事件
+        event = unwrap_event(event)
+
         if not self.api_key:
             yield "语音发送失败：插件未配置 Token Plan API Key，请让管理员在插件配置中填写。"
             return
